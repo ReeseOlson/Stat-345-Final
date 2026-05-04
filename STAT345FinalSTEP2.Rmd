@@ -1,0 +1,92 @@
+---
+title: "STAT 345 Final Project - What's Your Address?"
+author: "STAT 345"
+output: html_document
+---
+
+1.  *Maps* The US Census Bureau provides mapping shape files for a variety of variables across the entire United States. You can explore these at <https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html>. Make a map that displays county boundaries for the entire United States. You may use whichever package for plotting that you'd like, though you might find the 'ggmap' and 'rdgal' packages (and related tutorials) informative here.
+
+2.  *Roads* Your goal in this step is to summarize (tabulate) the road suffixes for each county in the United States. County-level data can be found at <https://www2.census.gov/geo/tiger/TIGER2023/ROADS/>. There are over 3000 files here, with file names that include the 5-digit GEOID for the county. As you process this data, you'll need to manage your memory in R. You'll likely want to download the file, unzip it, read it, summarize it, and then remove the file from memory. This is a great place for a function! Be sure to include the GEOID in your summary data for the next step.
+
+3.  *Putting it Together* Merge the county shape files with your county-level summaries. The main plot to create for the project is to color your map from step 1 based on the most common road suffix (summary from step 2). Beyond this plot, feel free to be creative when making at least two additional plots.
+
+```{r}
+# Libraries
+library(sf)
+library(dplyr)
+library(stringr)
+library(purrr)
+
+# This function takes a county GEOID, downloads the roads shapefile,
+# and returns the most common road suffix for that county
+process_county_roads <- function(geoid) {
+  tryCatch({
+    
+    # 1. Download the zip file for this county
+    url <- paste0("https://www2.census.gov/geo/tiger/TIGER2023/ROADS/tl_2023_", geoid, "_roads.zip")
+    tmp_zip <- tempfile(fileext = ".zip")
+    download.file(url, destfile = tmp_zip, mode = "wb", quiet = TRUE)
+    
+    # 2. Unzip into a temporary folder
+    tmp_dir <- tempfile()
+    dir.create(tmp_dir)
+    unzip(tmp_zip, exdir = tmp_dir)
+    
+    # 3. Read the shapefile
+    shp_file <- list.files(tmp_dir, pattern = "\\.shp$", full.names = TRUE)
+    roads <- st_read(shp_file, quiet = TRUE)
+    
+    # 4. Extract the suffix (last word of road name) and find the most common one
+    result <- roads %>%
+      st_drop_geometry() %>%
+      mutate(suffix = word(FULLNAME, -1)) %>%
+      filter(
+        !is.na(suffix),
+        !suffix %in% c("N", "S", "E", "W", "NE", "NW", "SE", "SW"),
+        !grepl("^[0-9]+$", suffix)
+      ) %>%
+      count(suffix) %>%
+      slice_max(n, n = 1, with_ties = FALSE) %>%
+      mutate(GEOID = geoid)
+    
+    # 5. Remove temporary files to free up memory
+    unlink(tmp_zip)
+    unlink(tmp_dir, recursive = TRUE)
+    rm(roads)
+    
+    return(result)
+    
+  }, error = function(e) {
+    message("Failed: ", geoid, " | ", e$message)
+    return(NULL)
+  })
+}
+```
+
+```{r, eval=FALSE}
+# Running the function across all counties
+road_summaries <- imap_dfr(geoids, function(geoid, idx) {
+  message(idx, "/", length(geoids), " | GEOID: ", geoid)
+  process_county_roads(geoid)
+})
+
+saveRDS(road_summaries, "road_summaries.rds")
+
+# Retry on some counties as failure due to server issues
+failed_geoids <- geoids[!geoids %in% road_summaries$GEOID]
+message(length(failed_geoids), " counties to retry")
+
+retry_summaries <- imap_dfr(failed_geoids, function(geoid, idx) {
+  message(idx, "/", length(failed_geoids), " | GEOID: ", geoid)
+  process_county_roads(geoid)
+})
+
+road_summaries <- bind_rows(road_summaries, retry_summaries)
+saveRDS(road_summaries, "road_summaries.rds")
+```
+
+```{r}
+# Filtering results down to exclude GEOID's that don't matter for project purposes. Wyoming is 56, so taking that and anything below as GEOID structure anything above isn't a state.
+road_summaries <- road_summaries |>
+  filter(as.numeric(substr(GEOID, 1, 2)) <= 56)
+```
