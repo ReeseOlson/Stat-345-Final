@@ -19,7 +19,7 @@ library(purrr)
 ```
 
 ```{r}
-# Direct download of the county shapefile (no need to loop - one file covers all US counties)
+# Direct download of the county shapefile
 url <- "https://www2.census.gov/geo/tiger/TIGER2023/COUNTY/tl_2023_us_county.zip"
 download.file(url, destfile = "county.zip")
 unzip("county.zip", exdir = "county_shape") #unzip this to folder called "county_shape"
@@ -30,7 +30,7 @@ geoids <- counties$GEOID #extracting GEOID column which need later in function
 ```
 
 ```{r}
-# This function takes a county GEOID, downloads the roads shapefile, and returns the most common road suffix for that county. Repeating process for all 3000+ counties.
+# This function takes a county GEOID, downloads the roads shapefile, and returns the most common     road suffix for that county. Repeating process for all 3000+ counties.
 process_county_roads <- function(geoid) {
   tryCatch({
     
@@ -55,7 +55,7 @@ process_county_roads <- function(geoid) {
       distinct(FULLNAME, suffix) %>%  #remove duplicate road names within the county
       filter(
         !is.na(suffix), #removing missing values
-        !suffix %in% c("N", "S", "E", "W", "NE", "NW", "SE", "SW"), #removing suffixes w/ directions
+        !suffix %in% c("N", "S", "E", "W", "NE", "NW", "SE", "SW"), #removing suffixes w directions
         !grepl("^[0-9]+$", suffix) #removing suffixes w/ numbers
       ) %>%
       count(suffix) %>% #counting how many roads w/ each suffix
