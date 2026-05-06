@@ -16,40 +16,53 @@ library(sf)
 library(dplyr)
 library(stringr)
 library(purrr)
+```
 
-# This function takes a county GEOID, downloads the roads shapefile,
-# and returns the most common road suffix for that county
+```{r}
+# Direct download of the county shapefile (no need to loop - one file covers all US counties)
+url <- "https://www2.census.gov/geo/tiger/TIGER2023/COUNTY/tl_2023_us_county.zip"
+download.file(url, destfile = "county.zip")
+unzip("county.zip", exdir = "county_shape") #unzip this to folder called "county_shape"
+
+# Reading in the shapefile
+counties <- st_read("county_shape/tl_2023_us_county.shp") #reading shapefile into R as a spatial df
+geoids <- counties$GEOID #extracting GEOID column which need later in function
+```
+
+```{r}
+# This function takes a county GEOID, downloads the roads shapefile, and returns the most common road suffix for that county. Repeating process for all 3000+ counties.
 process_county_roads <- function(geoid) {
   tryCatch({
     
     # 1. Download the zip file for this county
     url <- paste0("https://www2.census.gov/geo/tiger/TIGER2023/ROADS/tl_2023_", geoid, "_roads.zip")
     tmp_zip <- tempfile(fileext = ".zip")
-    download.file(url, destfile = tmp_zip, mode = "wb", quiet = TRUE)
+    download.file(url, destfile = tmp_zip, mode = "wb", quiet = TRUE) #temp file path to download counties zip data to, mode = "wb" to make sure it doesn't process file as text
     
-    # 2. Unzip into a temporary folder
+    # 2. Unzips downloaded data into a temporary folder
     tmp_dir <- tempfile()
     dir.create(tmp_dir)
     unzip(tmp_zip, exdir = tmp_dir)
     
-    # 3. Read the shapefile
+    # 3. Finds the .shp file inside the unzipped folder and reads into R as spatial df
     shp_file <- list.files(tmp_dir, pattern = "\\.shp$", full.names = TRUE)
     roads <- st_read(shp_file, quiet = TRUE)
     
     # 4. Extract the suffix (last word of road name) and find the most common one
     result <- roads %>%
-      st_drop_geometry() %>%
-      mutate(suffix = word(FULLNAME, -1)) %>%
+      st_drop_geometry() %>% #dropping the geometry column, don't need
+      mutate(suffix = word(FULLNAME, -1)) %>% #extracting suffix, taking last word from "FULLNAME"
+      distinct(FULLNAME, suffix) %>%  #remove duplicate road names within the county
       filter(
-        !is.na(suffix),
-        !suffix %in% c("N", "S", "E", "W", "NE", "NW", "SE", "SW"),
-        !grepl("^[0-9]+$", suffix)
+        !is.na(suffix), #removing missing values
+        !suffix %in% c("N", "S", "E", "W", "NE", "NW", "SE", "SW"), #removing suffixes w/ directions
+        !grepl("^[0-9]+$", suffix) #removing suffixes w/ numbers
       ) %>%
-      count(suffix) %>%
-      slice_max(n, n = 1, with_ties = FALSE) %>%
+      count(suffix) %>% #counting how many roads w/ each suffix
+      slice_max(n, n = 1, with_ties = FALSE) %>% #keeping most common suffix
       mutate(GEOID = geoid)
     
-    # 5. Remove temporary files to free up memory
+    # 5. Remove temporary files to free up memory (assisted w/ using Claude, it is necessary for            memory management as we are going through 3000+ county data)
     unlink(tmp_zip)
     unlink(tmp_dir, recursive = TRUE)
     rm(roads)
@@ -57,36 +70,51 @@ process_county_roads <- function(geoid) {
     return(result)
     
   }, error = function(e) {
-    message("Failed: ", geoid, " | ", e$message)
-    return(NULL)
+    message("Failed: ", geoid, " | ", e$message) #if error occurs, returns GEOID is and reason
+    return(NULL) #will move on to the next county after
   })
 }
 ```
 
 ```{r, eval=FALSE}
-# Running the function across all counties
+# Running the function across all counties. imap_dfr() was found from the purrr as a better way to   handle compared to a regular loop, shows progress throughout the process
 road_summaries <- imap_dfr(geoids, function(geoid, idx) {
   message(idx, "/", length(geoids), " | GEOID: ", geoid)
   process_county_roads(geoid)
 })
 
-saveRDS(road_summaries, "road_summaries.rds")
-
-# Retry on some counties as failure due to server issues
+# Retry any counties that failed due to server issues
 failed_geoids <- geoids[!geoids %in% road_summaries$GEOID]
-message(length(failed_geoids), " counties to retry")
+if (length(failed_geoids) > 0) {
+  message(length(failed_geoids), "counties failed, retrying...")
+  retry_summaries <- imap_dfr(failed_geoids, function(geoid, idx) {
+    message(idx, "/", length(failed_geoids), " | GEOID: ", geoid)
+    process_county_roads(geoid)
+  })
+}
 
-retry_summaries <- imap_dfr(failed_geoids, function(geoid, idx) {
-  message(idx, "/", length(failed_geoids), " | GEOID: ", geoid)
-  process_county_roads(geoid)
-})
-
+# Combining first run through and the retry to final road_summaries df
 road_summaries <- bind_rows(road_summaries, retry_summaries)
-saveRDS(road_summaries, "road_summaries.rds")
 ```
 
 ```{r}
 # Filtering results down to exclude GEOID's that don't matter for project purposes. Wyoming is 56, so taking that and anything below as GEOID structure anything above isn't a state.
 road_summaries <- road_summaries |>
   filter(as.numeric(substr(GEOID, 1, 2)) <= 56)
+
+write.csv(road_summaries, "road_summaries.csv", row.names = FALSE)
 ```
+
+Processing Decisions, Data Limitations
+
+-   Duplicate Road Names: Roads appearing multiple times within the same county's shapefile were filtered out. Without removing these duplicates, the repeated entries would skew the suffix count. We used distinct() to count each unique road name only once per county.
+
+-   Cardinal Directions: Road names that end in a directional suffix (N, S, NE, NW, etc.) have their direction captured as the suffix rather than the road type. These were filtered out as they are not meaningful road type suffixes.
+
+-   Numbers: Some county and state route designations (County Road 40, State Route 14) end in a number rather than a standard suffix. These were filtered out as they do not represent a road type.
+
+-   Missing Names: Some roads in the census data have no recorded name at all. We decided to remove these NA values before counting
+
+-   Some Server Limitations: Some counties (< 10) consistently returned rejected requests from the Census website which caused us to not be able to download their data. We tried going directly to the website and it blocks us from being able to download it. "The requested URL was rejected. Please consult with your administrator". These counties are absent from the final dataset.
+
+-   Suffix Extraction Method: Suffixes were extracted as the last word of the "FULLNAME" field. This is a reasonable approximation but is not perfect - roads with non-standard names may not be captured correctly
