@@ -1,0 +1,87 @@
+---
+title: "STAT345 Final Project - What's Your Address"
+author: ""
+output: html_document
+---
+
+STEP 1
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width  = 14,
+  fig.height = 9
+)
+```
+
+```{r}
+library(tigris)   # Census TIGER/Line shapefiles
+library(ggplot2)
+library(sf)
+library(dplyr)
+```
+
+```{r}
+# Using the tigris package to download the county shapefiles from 2023 Census directly. The "tigris_use_cache" option saves file locally, when we knit it won't have to redownload every time.
+options(tigris_use_cache = TRUE)
+
+counties_sf <- counties(cb = TRUE, resolution = "20m", year = 2023) #function from tigris package, downloads our data needed directly, cb = TRUE meaning it downloads a smaller version of shapefile
+```
+
+```{r}
+# STATEFP codes for territories to exclude:
+# 60 = American Samoa, 66 = Guam, 69 = Northern Mariana Islands, # 72 = Puerto Rico, 78 = US Virgin Islands
+counties_50 <- counties_sf %>%
+  filter(!STATEFP %in% c("60", "66", "69", "72", "78"))
+```
+
+```{r}
+# Dropping Alaska (02) and Hawaii (15). coord_sf w/ crs of 5070 tells ggplot to not dump the raw     coordinates onto the screen, this 5070 is an equal-area projection that preserves the relative     sizes of states/counties correctly tailored for the contiguous U.S specifically. For our AK and    HI plots the crs will be different.
+counties_48 <- counties_50 %>%
+  filter(!STATEFP %in% c("02", "15"))
+
+# Plot
+ggplot(data = counties_48) +
+  geom_sf(fill = "white", color = "black", linewidth = 0.1) +
+  coord_sf(crs = 5070) + 
+  labs(
+    title    = "Contiguous United States - County Boundaries",
+    subtitle = "Source: US Census Bureau TIGER/Line 2023"
+  ) +
+  theme_void()
+```
+
+```{r plot-counties}
+# Taking counties within Alaska. This time includes a crs of 3338, a crs tailored to AK. If we kept   the one we did for contiguous U.S. it would cause this plot to be distorted as AK sits very high   near the north pole.
+counties_ak <- counties_50 %>%
+  filter(STATEFP == "02")
+
+# Plot for Alaska
+ggplot(data = counties_ak) +
+  geom_sf(fill = "white", color = "black", linewidth = 0.2) +
+  coord_sf(crs = 3338) +
+  labs(
+    title    = "Alaska - County Boundaries",
+    subtitle = "Source: US Census Bureau TIGER/Line 2023"
+  ) +
+  theme_void()
+```
+
+```{r}
+# Taking counties within Hawaii. This time a crs of 26904, tailored to plotting HI as it sits far    out in the Pacific.
+counties_hi <- counties_50 %>%
+  filter(STATEFP == "15")
+
+# Plot for Hawaii
+ggplot(data = counties_hi) +
+  geom_sf(fill = "white", color = "black", linewidth = 0.2) +
+  coord_sf(crs = 26904) +
+  labs(
+    title    = "Hawaii - County Boundaries",
+    subtitle = "Source: US Census Bureau TIGER/Line 2023"
+  ) +
+  theme_void()
+```
+
+"counties_50" produced here will be taken and joined with our Step 2 road suffix summaries found, creating a merged data frame using GEOID column as the key.
