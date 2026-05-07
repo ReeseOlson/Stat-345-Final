@@ -52,7 +52,7 @@ ggplot(data = counties_48) +
   theme_void()
 ```
 
-```{r plot-counties}
+```{r}
 # Taking counties within Alaska. This time includes a crs of 3338, a crs tailored to AK. If we kept   the one we did for contiguous U.S. it would cause this plot to be distorted as AK sits very high   near the north pole.
 counties_ak <- counties_50 %>%
   filter(STATEFP == "02")
